@@ -266,13 +266,29 @@ const DEFAULT_ENTRIES = [
   },
 ];
 
-const STATUSES = ["Pending", "Approved", "Handover Done"];
+const DEFAULT_STATUSES = ["Pending", "Approved", "Handover Done"];
 
 const STATUS_STYLES = {
   Pending: { bg: "bg-amber-100", text: "text-amber-800", dot: "bg-amber-500" },
   Approved: { bg: "bg-blue-100", text: "text-blue-800", dot: "bg-blue-500" },
   "Handover Done": { bg: "bg-emerald-100", text: "text-emerald-800", dot: "bg-emerald-500" },
 };
+
+// Cycle of colors for custom statuses an admin adds later (not in STATUS_STYLES above).
+const CUSTOM_STATUS_PALETTE = [
+  { bg: "bg-purple-100", text: "text-purple-800", dot: "bg-purple-500" },
+  { bg: "bg-rose-100", text: "text-rose-800", dot: "bg-rose-500" },
+  { bg: "bg-cyan-100", text: "text-cyan-800", dot: "bg-cyan-500" },
+  { bg: "bg-orange-100", text: "text-orange-800", dot: "bg-orange-500" },
+  { bg: "bg-lime-100", text: "text-lime-800", dot: "bg-lime-500" },
+  { bg: "bg-fuchsia-100", text: "text-fuchsia-800", dot: "bg-fuchsia-500" },
+];
+
+function getStatusStyle(status, allStatuses) {
+  if (STATUS_STYLES[status]) return STATUS_STYLES[status];
+  const idx = Math.max(0, (allStatuses || []).indexOf(status));
+  return CUSTOM_STATUS_PALETTE[idx % CUSTOM_STATUS_PALETTE.length];
+}
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Permanent owner admin — always has full access, not shown in the Employee Access list,
@@ -325,6 +341,7 @@ export default function App() {
   const [entries, setEntries] = useState([]);
   const [items, setItems] = useState(DEFAULT_ITEMS);
   const [depts, setDepts] = useState(DEFAULT_DEPTS);
+  const [statuses, setStatuses] = useState(DEFAULT_STATUSES);
   const [allowedEmails, setAllowedEmails] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -374,10 +391,11 @@ export default function App() {
       }
       if (!mounted) return;
 
-      let finalItems, finalDepts, finalEmails;
+      let finalItems, finalDepts, finalEmails, finalStatuses;
       if (cfg && cfg.items && cfg.depts) {
         finalItems = cfg.items;
         finalDepts = cfg.depts;
+        finalStatuses = cfg.statuses && cfg.statuses.length ? cfg.statuses : DEFAULT_STATUSES;
         const rawEmails = cfg.allowedEmails || [];
         let migrated = false;
         finalEmails = rawEmails.map((e) => {
@@ -387,11 +405,11 @@ export default function App() {
           }
           return e;
         });
-        if (migrated) {
+        if (migrated || !cfg.statuses) {
           try {
             await storage.set(
               STORAGE_CONFIG_KEY,
-              JSON.stringify({ items: finalItems, depts: finalDepts, allowedEmails: finalEmails }),
+              JSON.stringify({ items: finalItems, depts: finalDepts, allowedEmails: finalEmails, statuses: finalStatuses }),
               true
             );
           } catch (e) {}
@@ -400,10 +418,11 @@ export default function App() {
         finalItems = DEFAULT_ITEMS;
         finalDepts = DEFAULT_DEPTS;
         finalEmails = DEFAULT_ALLOWED_EMAILS;
+        finalStatuses = DEFAULT_STATUSES;
         try {
           await storage.set(
             STORAGE_CONFIG_KEY,
-            JSON.stringify({ items: finalItems, depts: finalDepts, allowedEmails: finalEmails }),
+            JSON.stringify({ items: finalItems, depts: finalDepts, allowedEmails: finalEmails, statuses: finalStatuses }),
             true
           );
         } catch (e) {}
@@ -411,6 +430,7 @@ export default function App() {
       setItems(finalItems);
       setDepts(finalDepts);
       setAllowedEmails(finalEmails);
+      setStatuses(finalStatuses);
 
       let finalEntries;
       if (ent) {
@@ -468,15 +488,16 @@ export default function App() {
     }
   }, []);
 
-  const persistConfig = useCallback(async (nextItems, nextDepts, nextEmails) => {
+  const persistConfig = useCallback(async (nextItems, nextDepts, nextEmails, nextStatuses) => {
     setItems(nextItems);
     setDepts(nextDepts);
     setAllowedEmails(nextEmails);
+    setStatuses(nextStatuses);
     setSaving(true);
     try {
       await storage.set(
         STORAGE_CONFIG_KEY,
-        JSON.stringify({ items: nextItems, depts: nextDepts, allowedEmails: nextEmails }),
+        JSON.stringify({ items: nextItems, depts: nextDepts, allowedEmails: nextEmails, statuses: nextStatuses }),
         true
       );
     } catch (e) {
@@ -612,7 +633,7 @@ export default function App() {
     const trimmed = name.trim();
     if (!trimmed) return;
     if (items.some((i) => i.toLowerCase() === trimmed.toLowerCase())) return;
-    await persistConfig([...items, trimmed], depts, allowedEmails);
+    await persistConfig([...items, trimmed], depts, allowedEmails, statuses);
   }
 
   async function removeItem(name) {
@@ -621,7 +642,8 @@ export default function App() {
     await persistConfig(
       items.filter((i) => i !== name),
       depts,
-      allowedEmails
+      allowedEmails,
+      statuses
     );
   }
 
@@ -629,7 +651,7 @@ export default function App() {
     const trimmed = name.trim();
     if (!trimmed) return;
     if (depts.some((d) => d.toLowerCase() === trimmed.toLowerCase())) return;
-    await persistConfig(items, [...depts, trimmed], allowedEmails);
+    await persistConfig(items, [...depts, trimmed], allowedEmails, statuses);
   }
 
   async function removeDept(name) {
@@ -638,7 +660,27 @@ export default function App() {
     await persistConfig(
       items,
       depts.filter((d) => d !== name),
-      allowedEmails
+      allowedEmails,
+      statuses
+    );
+  }
+
+  async function addStatus(name) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (statuses.some((s) => s.toLowerCase() === trimmed.toLowerCase())) return;
+    await persistConfig(items, depts, allowedEmails, [...statuses, trimmed]);
+  }
+
+  async function removeStatus(name) {
+    const inUse = entries.some((en) => en.status === name);
+    if (inUse) return;
+    if (statuses.length <= 1) return;
+    await persistConfig(
+      items,
+      depts,
+      allowedEmails,
+      statuses.filter((s) => s !== name)
     );
   }
 
@@ -650,20 +692,21 @@ export default function App() {
       return;
     }
     if (allowedEmails.some((e) => e.email === trimmed)) return;
-    await persistConfig(items, depts, [...allowedEmails, { email: trimmed, role: role === "admin" ? "admin" : "member" }]);
+    await persistConfig(items, depts, [...allowedEmails, { email: trimmed, role: role === "admin" ? "admin" : "member" }], statuses);
   }
 
   async function removeAllowedEmail(email) {
     await persistConfig(
       items,
       depts,
-      allowedEmails.filter((e) => e.email !== email)
+      allowedEmails.filter((e) => e.email !== email),
+      statuses
     );
   }
 
   async function toggleAllowedEmailRole(email) {
     const next = allowedEmails.map((e) => (e.email === email ? { ...e, role: e.role === "admin" ? "member" : "admin" } : e));
-    await persistConfig(items, depts, next);
+    await persistConfig(items, depts, next, statuses);
   }
 
   async function importSheetData() {
@@ -681,7 +724,7 @@ export default function App() {
     });
     const nextItems = mergeUnique(items, mergeUnique(DEFAULT_ITEMS, neededItems));
     const nextDepts = mergeUnique(depts, mergeUnique(DEFAULT_DEPTS, neededDepts));
-    await persistConfig(nextItems, nextDepts, allowedEmails);
+    await persistConfig(nextItems, nextDepts, allowedEmails, statuses);
     await persistEntries([...toAdd, ...entries]);
     setToast(`Imported ${toAdd.length} request${toAdd.length > 1 ? "s" : ""} from the sheet`);
   }
@@ -917,7 +960,7 @@ export default function App() {
             className="px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-600"
           >
             <option value="">All Status</option>
-            {STATUSES.map((s) => (
+            {statuses.map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>
@@ -982,7 +1025,7 @@ export default function App() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filtered.map((en) => {
-                    const st = STATUS_STYLES[en.status] || STATUS_STYLES.Pending;
+                    const st = getStatusStyle(en.status, statuses);
                     return (
                       <tr key={en.id} className="hover:bg-slate-50 transition">
                         <td className="px-4 py-3">
@@ -1007,7 +1050,7 @@ export default function App() {
                                 onChange={(e) => handleStatusChange(en.id, e.target.value)}
                                 className={`text-xs font-medium rounded-full px-2 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-teal-600 ${st.bg} ${st.text}`}
                               >
-                                {STATUSES.map((s) => (
+                                {statuses.map((s) => (
                                   <option key={s} value={s}>
                                     {s}
                                   </option>
@@ -1086,7 +1129,7 @@ export default function App() {
           formData={formData}
           items={items}
           depts={depts}
-          statuses={STATUSES}
+          statuses={statuses}
           editingId={editingId}
           currentRole={currentRole}
           onChange={handleFormChange}
@@ -1106,11 +1149,14 @@ export default function App() {
         <ManageModal
           items={items}
           depts={depts}
+          statuses={statuses}
           allowedEmails={allowedEmails}
           onAddItem={addItem}
           onRemoveItem={removeItem}
           onAddDept={addDept}
           onRemoveDept={removeDept}
+          onAddStatus={addStatus}
+          onRemoveStatus={removeStatus}
           onAddEmail={addAllowedEmail}
           onRemoveEmail={removeAllowedEmail}
           onToggleRole={toggleAllowedEmailRole}
@@ -1282,11 +1328,14 @@ function Field({ label, children }) {
 function ManageModal({
   items,
   depts,
+  statuses,
   allowedEmails,
   onAddItem,
   onRemoveItem,
   onAddDept,
   onRemoveDept,
+  onAddStatus,
+  onRemoveStatus,
   onAddEmail,
   onRemoveEmail,
   onToggleRole,
@@ -1297,6 +1346,7 @@ function ManageModal({
 }) {
   const [newItem, setNewItem] = useState("");
   const [newDept, setNewDept] = useState("");
+  const [newStatus, setNewStatus] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [newEmailRole, setNewEmailRole] = useState("member");
 
@@ -1383,6 +1433,40 @@ function ManageModal({
                 onClick={() => {
                   onAddDept(newDept);
                   setNewDept("");
+                }}
+                className="px-3 py-2 rounded-lg bg-teal-700 text-white text-sm hover:bg-teal-800"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+          <div>
+            <h3 className="text-sm font-medium text-slate-700 mb-1">Status Options</h3>
+            <p className="text-xs text-slate-400 mb-2">
+              These appear in the Status dropdown on every request, e.g. "Waiting for SCD". A status that's currently
+              used on a request can't be removed — change those requests first.
+            </p>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {statuses.map((s) => (
+                <span key={s} className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 text-xs px-2 py-1 rounded-full">
+                  {s}
+                  <button onClick={() => onRemoveStatus(s)} className="text-slate-400 hover:text-red-600">
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={newStatus}
+                onChange={(e) => setNewStatus(e.target.value)}
+                placeholder="Add new status, e.g. Waiting for SCD"
+                className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-600"
+              />
+              <button
+                onClick={() => {
+                  onAddStatus(newStatus);
+                  setNewStatus("");
                 }}
                 className="px-3 py-2 rounded-lg bg-teal-700 text-white text-sm hover:bg-teal-800"
               >
